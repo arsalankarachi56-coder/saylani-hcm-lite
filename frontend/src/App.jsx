@@ -18,6 +18,7 @@ function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("hcm.user") || "null"); } catch { return null; }
   });
+  const [sessionReady, setSessionReady] = useState(() => !localStorage.getItem("hcm.user"));
   const [notice, setNotice] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
@@ -47,6 +48,40 @@ function App() {
   const value = useMemo(() => ({ user, signIn, signOut, notify, completePasswordChange }), [user]);
 
   useEffect(() => {
+    const handleSessionExpired = () => {
+      ["hcm.accessToken", "hcm.refreshToken", "hcm.user"].forEach((key) => localStorage.removeItem(key));
+      setUser(null);
+      setSessionReady(true);
+      navigate("/login", { replace: true });
+    };
+    window.addEventListener("hcm:session-expired", handleSessionExpired);
+    return () => window.removeEventListener("hcm:session-expired", handleSessionExpired);
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!user) {
+      setSessionReady(true);
+      return undefined;
+    }
+    let active = true;
+    api.get("/auth/me")
+      .then(({ data }) => {
+        if (active) {
+          localStorage.setItem("hcm.user", JSON.stringify(data.user));
+          setUser(data.user);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          ["hcm.accessToken", "hcm.refreshToken", "hcm.user"].forEach((key) => localStorage.removeItem(key));
+          setUser(null);
+        }
+      })
+      .finally(() => { if (active) setSessionReady(true); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (location.pathname === "/") {
       api.get("/setup/status").then(({ data }) => navigate(data.setupRequired ? "/setup" : user ? "/app" : "/login", { replace: true }))
         .catch(() => navigate("/login", { replace: true }));
@@ -55,13 +90,13 @@ function App() {
 
   return <AuthContext.Provider value={value}>
     {notice && <div className="toast"><Check size={17} />{notice}</div>}
-    <Routes>
+    {!sessionReady ? <div className="page-loading"><span className="spinner" /></div> : <Routes>
       <Route path="/" element={<div className="page-loading"><span className="spinner" /></div>} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={user ? <Navigate to="/app" replace /> : <LoginPage />} />
       <Route path="/app/*" element={user ? <AppShell /> : <Navigate to="/login" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    </Routes>}
   </AuthContext.Provider>;
 }
 
@@ -95,9 +130,18 @@ function SetupPage() {
 function LoginPage() {
   const { signIn, notify } = useAuth();
   const navigate = useNavigate();
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [setupStatusError, setSetupStatusError] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api.get("/setup/status")
+      .then(({ data }) => { if (active) setSetupRequired(Boolean(data.setupRequired)); })
+      .catch((error) => { if (active) setSetupStatusError(messageFromError(error)); });
+    return () => { active = false; };
+  }, []);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -111,7 +155,11 @@ function LoginPage() {
       <Field label="Password" type="password" placeholder="Enter your password" value={password} onChange={setPassword} required />
       <button className="button button-primary button-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}<ArrowRight size={17} /></button>
     </form>
-    <div className="login-foot"><ShieldCheck size={15} /> Secure access protected by your organization</div>
+    <div className="login-foot"><ShieldCheck size={15} />{setupStatusError
+      ? `Could not check workspace setup: ${setupStatusError}`
+      : setupRequired
+        ? <>First time here? <Link to="/setup">Create your company workspace</Link>.</>
+        : <>Need an account? Ask your company administrator to create one for you.</>}</div>
   </AuthFrame>;
 }
 
@@ -674,6 +722,7 @@ function AssistantPage() {
   const { user } = useAuth();
   const { notify } = useAuth();
   const navigate = useNavigate();
+  const { data: aiStatus, error: aiStatusError } = useLoad("/ai/status", []);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState([{ from: "assistant", text: user.role === "employee" ? "Hi! I can help with your own leave balance, time-off policies, and navigating your workspace." : "Hi! Ask me about headcount, attendance, leave, payroll, or people operations. I’ll use your workspace records to answer." }]);
   const [busy, setBusy] = useState(false);
@@ -693,7 +742,8 @@ function AssistantPage() {
     finally { setBusy(false); }
   };
   const suggestions = user.role === "employee" ? ["How many annual leave days do I have?", "What is the leave policy?", "Help me plan time off next month"] : ["Who is on leave?", "Summarize attendance this month", "How many people are in each department?"];
-  return <><PageHeading eyebrow="YOUR AI ASSISTANT" title="People questions, answered." description="Grounded in your workspace. Sensitive employee data stays protected." /><div className="assistant-layout"><div className="assistant-window"><div className="assistant-header"><span className="assistant-avatar"><Bot size={19} /></span><div><b>Saylani People Assistant</b><small><i />Connected to your workspace</small></div><span className="ai-badge">AI-GENERATED</span></div><div className="chat-messages">{messages.map((message, index) => <div className={`chat-message message-${message.from}`} key={`${message.from}-${index}`}><span className="chat-avatar">{message.from === "assistant" ? <Bot size={16} /> : user.name.slice(0, 1)}</span><div><p>{message.text}</p>{message.label && <small>{message.label}</small>}{message.leaveDraft && <button className="button button-primary button-small" onClick={() => { sessionStorage.setItem("hcm.leaveDraft", JSON.stringify(message.leaveDraft)); navigate("/app/leave"); }}>Use this leave request <ArrowRight size={14} /></button>}</div></div>)}{busy && <div className="chat-thinking"><span className="spinner" />Looking through your workspace…</div>}</div><form className="chat-composer" onSubmit={(event) => { event.preventDefault(); ask(); }}><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about your people workspace…" /><button disabled={busy || !question.trim()} aria-label="Send message"><ArrowRight size={17} /></button></form><div className="ai-disclaimer">AI-generated · Answers are based on the records and permissions available to your account.</div></div><aside className="suggestion-panel"><h3>Try asking</h3>{suggestions.map((suggestion) => <button key={suggestion} onClick={() => ask(suggestion)}>{suggestion}<ArrowRight size={14} /></button>)}<div className="privacy-note"><ShieldCheck size={17} /><span><b>Privacy comes first</b><small>Employees can only ask about their own personal records. Salary and compensation data is never exposed to employee AI chats.</small></span></div></aside></div></>;
+  const assistantConnection = aiStatusError ? "AI status unavailable" : aiStatus?.configured ? "AI assistant is ready" : aiStatus ? "AI not configured" : "Checking AI setup…";
+  return <><PageHeading eyebrow="YOUR AI ASSISTANT" title="People questions, answered." description="Grounded in your workspace. Sensitive employee data stays protected." /><div className="assistant-layout"><div className="assistant-window"><div className="assistant-header"><span className="assistant-avatar"><Bot size={19} /></span><div><b>Saylani People Assistant</b><small><i />{assistantConnection}</small></div><span className="ai-badge">AI-GENERATED</span></div><div className="chat-messages">{messages.map((message, index) => <div className={`chat-message message-${message.from}`} key={`${message.from}-${index}`}><span className="chat-avatar">{message.from === "assistant" ? <Bot size={16} /> : user.name.slice(0, 1)}</span><div><p>{message.text}</p>{message.label && <small>{message.label}</small>}{message.leaveDraft && <button className="button button-primary button-small" onClick={() => { sessionStorage.setItem("hcm.leaveDraft", JSON.stringify(message.leaveDraft)); navigate("/app/leave"); }}>Use this leave request <ArrowRight size={14} /></button>}</div></div>)}{busy && <div className="chat-thinking"><span className="spinner" />Looking through your workspace…</div>}</div><form className="chat-composer" onSubmit={(event) => { event.preventDefault(); ask(); }}><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about your people workspace…" /><button disabled={busy || !question.trim()} aria-label="Send message"><ArrowRight size={17} /></button></form><div className="ai-disclaimer">AI-generated · Answers are based on the records and permissions available to your account.</div></div><aside className="suggestion-panel"><h3>Try asking</h3>{suggestions.map((suggestion) => <button key={suggestion} onClick={() => ask(suggestion)}>{suggestion}<ArrowRight size={14} /></button>)}<div className="privacy-note"><ShieldCheck size={17} /><span><b>Privacy comes first</b><small>Employees can only ask about their own personal records. Salary and compensation data is never exposed to employee AI chats.</small></span></div></aside></div></>;
 }
 
 function SettingsPage() {

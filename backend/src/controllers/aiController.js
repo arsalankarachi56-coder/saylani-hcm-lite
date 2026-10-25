@@ -89,6 +89,10 @@ async function executeTool(name, args, user) {
   return { error: "Unsupported tool." };
 }
 
+async function status(_req, res) {
+  res.json({ configured: Boolean(process.env.GROQ_API_KEY) });
+}
+
 async function ask(req, res) {
   const { question } = z.object({ question: z.string().trim().min(2).max(2000), context: z.string().max(1000).optional() }).parse(req.body);
   if (req.user.role === "employee" && isSalaryQuestion(question)) {
@@ -123,6 +127,7 @@ async function ask(req, res) {
       response = await upstream.json();
       const message = response.choices?.[0]?.message;
       if (!message?.tool_calls?.length) break;
+      if (attempt === 4) throw new Error("AI tool-call limit reached.");
       messages.push(message);
       for (const call of message.tool_calls) {
         const result = await executeTool(call.function.name, JSON.parse(call.function.arguments || "{}"), req.user);
@@ -144,4 +149,4 @@ async function ask(req, res) {
   }
 }
 
-module.exports = { ask, isSalaryQuestion, isRomanUrdu };
+module.exports = { ask, status, isSalaryQuestion, isRomanUrdu };

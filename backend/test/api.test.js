@@ -30,6 +30,12 @@ test("protected account endpoints reject unauthenticated requests", async () => 
   assert.deepEqual(await response.json(), { message: "Authentication required." });
 });
 
+test("AI configuration status is protected", async () => {
+  const response = await fetch(`${baseUrl}/api/ai/status`);
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { message: "Authentication required." });
+});
+
 test("admin HR creation route is not shadowed by the organization catalog route", () => {
   const hrCreate = routes.stack.findIndex((layer) => layer.route?.path === "/organization/hr" && layer.route.methods.post);
   const genericCreate = routes.stack.findIndex((layer) => layer.route?.path === "/organization/:type" && layer.route.methods.post);

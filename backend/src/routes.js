@@ -66,6 +66,7 @@ router.post("/announcements", allowRoles("hr"), communication.createAnnouncement
 router.get("/notifications", communication.listNotifications);
 router.patch("/notifications/:id/read", communication.readNotification);
 router.get("/audit", allowRoles("admin"), communication.auditFeed);
+router.get("/ai/status", ai.status);
 router.post("/ai", ai.ask);
 
 module.exports = router;

@@ -5,7 +5,7 @@ const { localDateKey, localMinutes, parseOfficeDateTime } = require("../src/serv
 const { countWorkingDaysInRange } = require("../src/services/leaveService");
 const { distanceMeters } = require("../src/services/geofenceService");
 const { validateCheckInPolicy } = require("../src/services/attendancePolicyService");
-const { isSalaryQuestion, isRomanUrdu } = require("../src/controllers/aiController");
+const { isSalaryQuestion, isRomanUrdu, status: aiStatus } = require("../src/controllers/aiController");
 
 test("calculates monthly tax progressively at each annual slab", () => {
   assert.equal(calculateTax(600000), 0);
@@ -36,6 +36,23 @@ test("recognizes Roman Urdu prompts and computes a safe office geofence distance
   assert.equal(isRomanUrdu("Mujhe aglay haftay chhutti chahiye"), true);
   assert.equal(distanceMeters(24.8607, 67.0011, 24.8607, 67.0011), 0);
   assert.ok(distanceMeters(0, 0, 0, 1) > 111000 && distanceMeters(0, 0, 0, 1) < 112000);
+});
+
+test("AI configuration status exposes only whether a server key exists", () => {
+  const originalKey = process.env.GROQ_API_KEY;
+  const result = {};
+  const response = { json(value) { Object.assign(result, value); } };
+  try {
+    delete process.env.GROQ_API_KEY;
+    aiStatus({}, response);
+    assert.deepEqual(result, { configured: false });
+    process.env.GROQ_API_KEY = "test-key";
+    aiStatus({}, response);
+    assert.deepEqual(result, { configured: true });
+  } finally {
+    if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = originalKey;
+  }
 });
 
 test("enforces optional location and camera attendance policies", () => {
